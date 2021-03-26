@@ -7,6 +7,6 @@ factor      : (PLUS|MINUS) factor
 
 power       : atom (POW factor)*
 
-atom        : MODULE|SYMBOL|HEX
+atom        : MODULE|SYMBOL|HEX|MODULE_NAME.METHOD|METHOD
             : LPAREN expr RPAREN
             : LSQUARE expr RSQUARE

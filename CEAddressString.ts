@@ -3,7 +3,9 @@ const MODULE_OR_SYMBOL_TEXT = /[^\u4e00-\u9fa5\w\-\.]/i;
 
 const TT_HEX = "HEX";
 const TT_MODULE = "MODULE"; // a.exe or "a b.exe" or 'a b.exe'
-const TT_SYMBOL = "SYMBOL";
+const TT_MMETHOD = "MMETHOD"; // user32.MessageBoxA, 指定了模块的方法地址
+const TT_METHOD = "METHOD"; // MessageBoxA
+const TT_SYMBOL = "SYMBOL"; // s1 or s2
 const TT_PLUS = "PLUS"; // +
 const TT_MINUS = "MINUS"; // -
 const TT_MUL = "MUL"; // *
@@ -15,6 +17,8 @@ const TT_LSQUARE = "LSQUARE"; // [
 const TT_RSQUARE = "RSQUARE"; // ]
 const TT_EOF = "EOF";
 
+const PE_FILE = ["dll", "exe"];
+
 const SYMBOL_TABLE = {
   s1: 0x222,
   s2: 0x333,
@@ -23,6 +27,13 @@ const SYMBOL_TABLE = {
 const MODULE_TABLE = {
   "game.exe": 0x00400000,
   "user32.dll": 0x763b0000,
+};
+
+const MODULE_IMPOT_TABLE = {
+  user32: {
+    MessageBoxA: 0x1,
+    MessageBoxW: 0x2,
+  },
 };
 
 class Position {
@@ -234,23 +245,46 @@ class Lexer {
    */
   makeModuleOrSymbol() {
     let str = "";
+    let method = "";
     let type = TT_SYMBOL;
     const posStart = this.pos.copy();
 
     while (this.curChar !== null && !MODULE_OR_SYMBOL_TEXT.test(this.curChar)) {
-      if (this.curChar === ".") type = TT_MODULE;
+      if (type === TT_MODULE) method += this.curChar;
+
+      if (this.curChar === ".") {
+        type = TT_MODULE;
+      }
       str += this.curChar;
       this.advance();
     }
 
     // is hex?
+    // is Method?
+    // 如果用户定义了这个Symbol，那么就返回Symbol,否则遍历所有模块，使用GetProcAddress获取Method,如果没找到，最后再尝试解析为16进制
     if (type === TT_SYMBOL && !SYMBOL_TABLE.hasOwnProperty(str)) {
-      if (!HEX_TEXT.test(str.replace(/^0x/, ""))) {
-        type = TT_HEX;
-      } else {
-        throw `not defined symbol "${str}"`;
+      const _modules = Object.keys(MODULE_IMPOT_TABLE);
+
+      for (const moduleName of _modules) {
+        const methods = Object.keys(MODULE_IMPOT_TABLE[moduleName]);
+        if (methods.includes(str)) {
+          type = TT_METHOD;
+          break;
+        }
+      }
+
+      if (type === TT_SYMBOL) {
+        if (!HEX_TEXT.test(str.replace(/^0x/, ""))) {
+          type = TT_HEX;
+        } else {
+          throw `not defined symbol "${str}"`;
+        }
       }
     }
+
+    // is MODULE_NAME.METHOD?
+    method = method.toLowerCase();
+    if (type === TT_MODULE && !PE_FILE.includes(method)) type = TT_MMETHOD;
 
     return new Token(type, str, posStart, this.pos);
   }
@@ -302,6 +336,18 @@ class SymbolNode extends CEAddressStringNode {
 }
 
 class HexNode extends CEAddressStringNode {
+  constructor(public token: Token) {
+    super(token.posStart, token.posEnd);
+  }
+}
+
+class MMethodNode extends CEAddressStringNode {
+  constructor(public token: Token) {
+    super(token.posStart, token.posEnd);
+  }
+}
+
+class MethodNode extends CEAddressStringNode {
   constructor(public token: Token) {
     super(token.posStart, token.posEnd);
   }
@@ -423,6 +469,12 @@ class Parser {
     } else if (token.type === TT_HEX) {
       this.advance();
       return new HexNode(token);
+    } else if (token.type === TT_MMETHOD) {
+      this.advance();
+      return new MMethodNode(token);
+    } else if (token.type === TT_METHOD) {
+      this.advance();
+      return new MethodNode(token);
     } else if (token.type === TT_LPAREN) {
       this.advance();
       const _expr = this.expr();
@@ -453,7 +505,7 @@ class Parser {
       throw new InvalidSyntaxError(
         token.posStart,
         token.posEnd,
-        `Expected '+', '-', '*', '/', MODULE, SYMBOL, HEX`
+        `Expected '+', '-', '*', '/', MODULE, SYMBOL, HEX or MODULE_NAME.METHOD`
       );
     }
   }
@@ -467,6 +519,17 @@ class Interpreter {
       return SYMBOL_TABLE[node.token.value];
     } else if (node instanceof ModuleNode) {
       return MODULE_TABLE[node.token.value];
+    } else if (node instanceof MMethodNode) {
+      const [module, method] = node.token.value.split(".");
+      return MODULE_IMPOT_TABLE[module][method] ?? 0;
+    } else if (node instanceof MethodNode) {
+      const _modules: string[] = Object.keys(MODULE_IMPOT_TABLE);
+      for (const moduleName of _modules) {
+        const _methods: string[] = Object.keys(MODULE_IMPOT_TABLE[moduleName]);
+        if (_methods.includes(node.token.value)) {
+          return MODULE_IMPOT_TABLE[moduleName][node.token.value];
+        }
+      }
     } else if (node instanceof UnaryOpNode) {
       const value = this.visit(node.node);
       if (node.token.type === TT_MINUS) {
