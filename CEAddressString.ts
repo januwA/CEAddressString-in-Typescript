@@ -26,6 +26,7 @@ const SYMBOL_TABLE = {
 
 const MODULE_TABLE = {
   "game.exe": 0x00400000,
+  "abc.exe": 0x00400000,
   "user32.dll": 0x763b0000,
 };
 
@@ -67,9 +68,9 @@ function stringsWithArrows(
   const lines = text.split("\n");
   result += lines[posStart.row];
   result += "\n";
-  result += posStart.col
-    ? " ".padStart(posStart.col)
-    : "" + `^`.repeat(posEnd.col - posStart.col);
+  result +=
+    (posStart.col ? " ".padStart(posStart.col) : "") +
+    `^`.repeat(posEnd.col - posStart.col);
   return result;
 }
 
@@ -153,11 +154,6 @@ class Lexer {
     const tokens: Token[] = [];
 
     while (this.curChar !== null) {
-      if (!HEX_TEXT.test(this.curChar)) {
-        tokens.push(this.makeHex());
-        continue;
-      }
-
       switch (this.curChar) {
         case " ":
         case "\t":
@@ -210,14 +206,14 @@ class Lexer {
 
         default:
           if (!MODULE_OR_SYMBOL_TEXT.test(this.curChar)) {
-            tokens.push(this.makeModuleOrSymbol());
+            tokens.push(this.makeModuleOrSymbolOrHex());
             break;
           }
 
           const posStart = this.pos.copy();
           const c = this.curChar;
           this.advance();
-          throw new IllegalCharError(posStart, this.pos, c);
+          throw new IllegalCharError(posStart, this.pos, c).toString();
           break;
       }
     }
@@ -226,29 +222,7 @@ class Lexer {
     return tokens;
   }
 
-  makeHex() {
-    let str = "";
-    const posStart = this.pos.copy();
-
-    const getHex = () => {
-      while (this.curChar !== null && !HEX_TEXT.test(this.curChar)) {
-        str += this.curChar;
-        this.advance();
-      }
-    };
-
-    if (this.curChar === "0") {
-      this.advance();
-      if ((this.curChar as string) === "x") {
-        this.advance();
-        getHex();
-      } else getHex();
-    } else getHex();
-
-    return new Token(TT_HEX, str, posStart, this.pos);
-  }
-
-  makeModuleOrSymbol() {
+  makeModuleOrSymbolOrHex() {
     let str = "";
     let method = "";
     let type = TT_SYMBOL;
@@ -264,10 +238,16 @@ class Lexer {
       this.advance();
     }
 
-    // is Method?
-    // 不做检查，如果SYMBOL_TABLE中不存在，直接断言为METHOD
+    // 优先级: SYMBOL > HEX > METHOD
     if (type === TT_SYMBOL && !SYMBOL_TABLE.hasOwnProperty(str)) {
-      type = TT_METHOD;
+      let hexStr = str;
+      if (hexStr.startsWith("0x")) hexStr = hexStr.substr(2);
+
+      if (!HEX_TEXT.test(hexStr)) {
+        type = TT_HEX;
+      } else {
+        type = TT_METHOD;
+      }
     }
 
     // is MODULE_NAME.METHOD?
@@ -598,7 +578,7 @@ class Interpreter {
 export function getAddress(text: string): number {
   const lexer = new Lexer(text);
   const tokens = lexer.makeTokens();
-  // console.log(tokens.map((it) => it.toString()));
+  console.log(tokens.map((it) => it.toString()));
 
   const parser = new Parser(tokens);
   const nodeAST = parser.parse();
