@@ -1,9 +1,9 @@
 const HEX_TEXT = /[^0-9a-f]/i;
 const MODULE_OR_SYMBOL_TEXT = /[^\u4e00-\u9fa5\w\-\.]/i;
 
-const TT_HEX = "HEX";
-const TT_MODULE = "MODULE"; // a.exe or "a b.exe" or 'a b.exe'
-const TT_MMETHOD = "MMETHOD"; // user32.MessageBoxA, 指定了模块的方法地址
+const TT_HEX = "HEX"; // 默认使用16进制
+const TT_MODULE = "MODULE"; // a.exe or "a b.exe" or 'user32.MessageBoxA'
+const TT_MMETHOD = "MMETHOD"; // user32.MessageBoxA 指定了模块的方法地址
 const TT_METHOD = "METHOD"; // MessageBoxA
 const TT_SYMBOL = "SYMBOL"; // s1 or s2
 const TT_PLUS = "PLUS"; // +
@@ -67,7 +67,9 @@ function stringsWithArrows(
   const lines = text.split("\n");
   result += lines[posStart.row];
   result += "\n";
-  result += " ".padStart(posStart.col) + `^`.repeat(posEnd.col - posStart.col);
+  result += posStart.col
+    ? " ".padStart(posStart.col)
+    : "" + `^`.repeat(posEnd.col - posStart.col);
   return result;
 }
 
@@ -80,7 +82,7 @@ class CEAddressStringError {
   ) {}
 
   toString() {
-    let err = `${this.errorName}: ${this.message}'\n`;
+    let err = `${this.errorName}: ${this.message}\n`;
     err += `\trow(${this.posStart.row}), col(${this.posStart.col})\n\n`;
     err += stringsWithArrows(this.posStart.text, this.posStart, this.posEnd);
     err += "\n";
@@ -90,13 +92,19 @@ class CEAddressStringError {
 
 class IllegalCharError extends CEAddressStringError {
   constructor(posStart: Position, posEnd: Position, message: string) {
-    super("Illegal CharError", posStart, posEnd, message);
+    super("Illegal Char Error", posStart, posEnd, message);
   }
 }
 
 class InvalidSyntaxError extends CEAddressStringError {
   constructor(posStart: Position, posEnd: Position, message: string) {
-    super("Illegal CharError", posStart, posEnd, message);
+    super("Invalid Syntax Error", posStart, posEnd, message);
+  }
+}
+
+class RuntimeError extends CEAddressStringError {
+  constructor(posStart: Position, posEnd: Position, message: string) {
+    super("Runtime Error", posStart, posEnd, message);
   }
 }
 
@@ -197,7 +205,7 @@ class Lexer {
 
         case '"':
         case "'":
-          tokens.push(this.makeString());
+          this.makeString(tokens);
           break;
 
         default:
@@ -240,9 +248,6 @@ class Lexer {
     return new Token(TT_HEX, str, posStart, this.pos);
   }
 
-  /**
-   * * 该方法会将HEX解析为SYMBOL，可以在symbol表中找是否存在，不存在则解析为HEX，解析失败给出SYMBOL不存在的错误
-   */
   makeModuleOrSymbol() {
     let str = "";
     let method = "";
@@ -259,27 +264,10 @@ class Lexer {
       this.advance();
     }
 
-    // is hex?
     // is Method?
-    // 如果用户定义了这个Symbol，那么就返回Symbol,否则遍历所有模块，使用GetProcAddress获取Method,如果没找到，最后再尝试解析为16进制
+    // 不做检查，如果SYMBOL_TABLE中不存在，直接断言为METHOD
     if (type === TT_SYMBOL && !SYMBOL_TABLE.hasOwnProperty(str)) {
-      const _modules = Object.keys(MODULE_IMPOT_TABLE);
-
-      for (const moduleName of _modules) {
-        const methods = Object.keys(MODULE_IMPOT_TABLE[moduleName]);
-        if (methods.includes(str)) {
-          type = TT_METHOD;
-          break;
-        }
-      }
-
-      if (type === TT_SYMBOL) {
-        if (!HEX_TEXT.test(str.replace(/^0x/, ""))) {
-          type = TT_HEX;
-        } else {
-          throw `not defined symbol "${str}"`;
-        }
-      }
+      type = TT_METHOD;
     }
 
     // is MODULE_NAME.METHOD?
@@ -303,19 +291,49 @@ class Lexer {
     return new Token(tokenType, value, posStart, this.pos);
   }
 
-  makeString() {
+  /**
+   * "user32.dll"
+   * "user32.MessageBoxA"
+   * "MessageBoxA"
+   * "s1"
+   * "1+1" => 2
+   *
+   * ## error
+   * "user32.dll+1"
+   * "user32.MessageBoxA+1"
+   * "MessageBoxA+1"
+   * "s1+1"
+   */
+  makeString(tokens: Token[]): void {
     let str = "";
+    let type = TT_MODULE;
     const s = this.curChar; // " or '
     const posStart = this.pos.copy();
-    this.advance();
 
+    this.advance();
     while (this.curChar !== null && this.curChar !== s) {
       str += this.curChar;
       this.advance();
     }
-
     this.advance();
-    return new Token(TT_MODULE, str, posStart, this.pos);
+
+    if (str.includes(".")) {
+      const [_module, _method] = str.split(".");
+      if (!PE_FILE.includes(_method)) type = TT_MMETHOD;
+    } else {
+      if (SYMBOL_TABLE.hasOwnProperty(str)) {
+        type = TT_SYMBOL;
+      } else if (/[\+\-\*\/]/.test(str)) {
+        const lexer = new Lexer(str);
+        const _tokens = lexer.makeTokens();
+        for (const tok of _tokens) tokens.push(tok);
+        return;
+      } else {
+        type = TT_METHOD;
+      }
+    }
+
+    tokens.push(new Token(type, str, posStart, this.pos));
   }
 }
 
@@ -486,7 +504,7 @@ class Parser {
           this.curToken.posStart,
           this.curToken.posEnd,
           `Expected ')'`
-        );
+        ).toString();
       }
     } else if (token.type === TT_LSQUARE) {
       this.advance();
@@ -499,14 +517,14 @@ class Parser {
           this.curToken.posStart,
           this.curToken.posEnd,
           `Expected ']'`
-        );
+        ).toString();
       }
     } else {
       throw new InvalidSyntaxError(
         token.posStart,
         token.posEnd,
         `Expected '+', '-', '*', '/', MODULE, SYMBOL, HEX or MODULE_NAME.METHOD`
-      );
+      ).toString();
     }
   }
 }
@@ -530,6 +548,12 @@ class Interpreter {
           return MODULE_IMPOT_TABLE[moduleName][node.token.value];
         }
       }
+
+      throw new RuntimeError(
+        node.posStart,
+        node.posEnd,
+        `Not defined symbol "${node.token.value}"`
+      ).toString();
     } else if (node instanceof UnaryOpNode) {
       const value = this.visit(node.node);
       if (node.token.type === TT_MINUS) {
@@ -562,7 +586,11 @@ class Interpreter {
           return left ** right;
       }
     } else {
-      throw `Error Node.`;
+      throw new RuntimeError(
+        node.posStart,
+        node.posEnd,
+        `Unexpected CEAddressStringNode`
+      ).toString();
     }
   }
 }

@@ -53,3 +53,18 @@ assert.ok(
     MODULE_IMPOT_TABLE.user32.MessageBoxA +
       MODULE_IMPOT_TABLE.user32.MessageBoxW
 );
+
+assert.ok(
+  getAddress(" 'user32.MessageBoxA' + 'user32.MessageBoxW' ") ===
+    MODULE_IMPOT_TABLE.user32.MessageBoxA +
+      MODULE_IMPOT_TABLE.user32.MessageBoxW
+);
+assert.ok(
+  getAddress(" 'MessageBoxA' + 'MessageBoxW' ") ===
+    MODULE_IMPOT_TABLE.user32.MessageBoxA +
+      MODULE_IMPOT_TABLE.user32.MessageBoxW
+);
+
+assert.ok(getAddress(" 's1'") === SYMBOL_TABLE.s1);
+assert.ok(getAddress(" 's1' + 1 ") === SYMBOL_TABLE.s1 + 1);
+assert.ok(getAddress(" 's1 + 1' ") === SYMBOL_TABLE.s1 + 1);
