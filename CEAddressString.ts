@@ -299,14 +299,19 @@ class Lexer {
    * "user32.dll"
    * "user32.MessageBoxA"
    * "MessageBoxA"
-   * "s1"
+   * "s1" => 优先级: SYMBOL > HEX > METHOD
    * "1+1" => 2
+   * "0xaa"
+   * "a b.exe"
    *
    * ## error
    * "user32.dll+1"
    * "user32.MessageBoxA+1"
    * "MessageBoxA+1"
    * "s1+1"
+   * 
+   * ## test
+   * 1+'user32.MessageBoxA'-0xabc+MessageBoxA+'0x22'+'MessageboxA'
    */
   makeString(tokens: Token[]): void {
     let str = "";
@@ -332,6 +337,8 @@ class Lexer {
         const _tokens = lexer.makeTokens();
         for (const tok of _tokens) tokens.push(tok);
         return;
+      } else if (str.startsWith("0x") || !HEX_TEXT.test(str)) {
+        type = TT_HEX;
       } else {
         type = TT_METHOD;
       }
