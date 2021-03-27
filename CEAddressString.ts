@@ -204,6 +204,10 @@ class Lexer {
           this.makeString(tokens);
           break;
 
+        case "0":
+          tokens.push(this.makeHex());
+          break;
+
         default:
           if (!MODULE_OR_SYMBOL_TEXT.test(this.curChar)) {
             tokens.push(this.makeModuleOrSymbolOrHex());
@@ -220,6 +224,29 @@ class Lexer {
 
     tokens.push(new Token(TT_EOF, null, this.pos));
     return tokens;
+  }
+
+  // 0a or 0x0a
+  makeHex() {
+    let str = this.curChar;
+    const posStart = this.pos.copy();
+
+    const getHex = () => {
+      while (this.curChar !== null && !HEX_TEXT.test(this.curChar)) {
+        str += this.curChar;
+        this.advance();
+      }
+    };
+
+    this.advance();
+
+    if ((this.curChar as string) === "x") {
+      str += this.curChar;
+      this.advance();
+      getHex();
+    } else getHex();
+
+    return new Token(TT_HEX, str, posStart, this.pos);
   }
 
   makeModuleOrSymbolOrHex() {
@@ -240,10 +267,7 @@ class Lexer {
 
     // 优先级: SYMBOL > HEX > METHOD
     if (type === TT_SYMBOL && !SYMBOL_TABLE.hasOwnProperty(str)) {
-      let hexStr = str;
-      if (hexStr.startsWith("0x")) hexStr = hexStr.substr(2);
-
-      if (!HEX_TEXT.test(hexStr)) {
+      if (!HEX_TEXT.test(str)) {
         type = TT_HEX;
       } else {
         type = TT_METHOD;
