@@ -1,23 +1,25 @@
-const HEX_TEXT = /[^0-9a-f]/i;
-const MODULE_OR_SYMBOL_TEXT = /[^\u4e00-\u9fa5\w\-\.]/i;
+const IDENT_INSTR_TEXT = /[\u4e00-\u9fa5\w\-\+\='&\(\)\[\]\s]/i;
+const IDENT_TEXT = /[\u4e00-\u9fa5\w\='&]/i;
+const HEX_TEXT = /[\da-f]/i;
 
-const TT_HEX = "HEX"; // 默认使用16进制
-const TT_MODULE = "MODULE"; // a.exe or "a b.exe" or 'user32.MessageBoxA'
-const TT_MMETHOD = "MMETHOD"; // user32.MessageBoxA 指定了模块的方法地址
-const TT_METHOD = "METHOD"; // MessageBoxA
-const TT_SYMBOL = "SYMBOL"; // s1 or s2
-const TT_PLUS = "PLUS"; // +
-const TT_MINUS = "MINUS"; // -
-const TT_MUL = "MUL"; // *
-const TT_DIV = "DIV"; // /
-const TT_POW = "POW"; // **
-const TT_LPAREN = "LPAREN"; // (
-const TT_RPAREN = "RPAREN"; // )
-const TT_LSQUARE = "LSQUARE"; // [
-const TT_RSQUARE = "RSQUARE"; // ]
-const TT_EOF = "EOF";
+export enum TT {
+  HEX = "HEX",
 
-const PE_FILE = ["dll", "exe"];
+  PLUS = "PLUS", // +
+  MINUS = "MINUS", // -
+  MUL = "MUL", // *
+  POW = "POW", // **
+  DIV = "DIV", // /
+
+  LPAREN = "LPAREN", // (
+  RPAREN = "RPAREN", // )
+  LSQUARE = "LSQUARE", // [
+  RSQUARE = "RSQUARE", // ]
+
+  IDENT = "IDENT",
+  DOT = "DOT", // .
+  EOF = "EOF",
+}
 
 const SYMBOL_TABLE = {
   s1: 0x222,
@@ -136,270 +138,213 @@ class Token {
 
 class Lexer {
   pos = new Position(-1, 0, -1, this.text);
-  curChar?: string = null;
+  c?: string = null;
+
+  // string 模式下不会解析符号
+  // "=+(][x)&.exe"   =>  IDENT:=+(][x)& DOT:. IDENT:exe
+  // "'a&a.txt"   => IDENT:'a&a DOT:. IDENT:exe
+  // 123.exe  => HEX:123 DOT:. IDENT:exe
+  // "123.exe"  => IDENT:123 DOT:. IDENT:exe
+  inString: boolean = false;
+
   constructor(public text: string) {
     this.advance();
   }
 
   advance() {
-    this.pos.advance(this.curChar);
+    this.pos.advance(this.c);
     if (this.pos.index < this.text.length) {
-      this.curChar = this.text[this.pos.index];
+      this.c = this.text[this.pos.index];
     } else {
-      this.curChar = null;
+      this.c = null;
     }
   }
 
   makeTokens(): Token[] {
     const tokens: Token[] = [];
 
-    while (this.curChar !== null) {
-      switch (this.curChar) {
-        case " ":
-        case "\t":
+    while (this.c !== null) {
+      if (this.inString) {
+        if (this.c === ".") {
+          tokens.push(new Token(TT.DOT, ".", this.pos));
           this.advance();
-          break;
-
-        case "+":
-          tokens.push(new Token(TT_PLUS, "+", this.pos));
+        } else if (this.c === '"') {
+          this.inString = !this.inString;
           this.advance();
-          break;
-
-        case "-":
-          tokens.push(new Token(TT_MINUS, "-", this.pos));
-          this.advance();
-          break;
-
-        case "*":
-          tokens.push(this.makeMulOrPow());
-          break;
-
-        case "/":
-          tokens.push(new Token(TT_DIV, "/", this.pos));
-          this.advance();
-          break;
-
-        case "(":
-          tokens.push(new Token(TT_LPAREN, "(", this.pos));
-          this.advance();
-          break;
-
-        case ")":
-          tokens.push(new Token(TT_RPAREN, ")", this.pos));
-          this.advance();
-          break;
-
-        case "[":
-          tokens.push(new Token(TT_LSQUARE, "[", this.pos));
-          this.advance();
-          break;
-
-        case "]":
-          tokens.push(new Token(TT_RSQUARE, "]", this.pos));
-          this.advance();
-          break;
-
-        case '"':
-        case "'":
-          this.makeString(tokens);
-          break;
-
-        case "0":
-          tokens.push(this.makeHex());
-          break;
-
-        default:
-          if (!MODULE_OR_SYMBOL_TEXT.test(this.curChar)) {
-            tokens.push(this.makeModuleOrSymbolOrHex());
-            break;
-          }
-
+        } else if (IDENT_INSTR_TEXT.test(this.c)) {
+          tokens.push(this.makeIdent(IDENT_INSTR_TEXT));
+        } else {
           const posStart = this.pos.copy();
-          const c = this.curChar;
+          const c = this.c;
           this.advance();
           throw new IllegalCharError(posStart, this.pos, c).toString();
-          break;
+        }
+      } else {
+        switch (this.c) {
+          case " ":
+          case "\t":
+          case "\r":
+          case "\n":
+            this.advance();
+            break;
+
+          case ".":
+            tokens.push(new Token(TT.DOT, ".", this.pos));
+            this.advance();
+            break;
+
+          case "+":
+            tokens.push(new Token(TT.PLUS, "+", this.pos));
+            this.advance();
+            break;
+
+          case "-":
+            tokens.push(new Token(TT.MINUS, "-", this.pos));
+            this.advance();
+            break;
+
+          case "*":
+            const start = this.pos.copy();
+            this.advance();
+            if (this.c === "*") {
+              this.advance();
+              tokens.push(new Token(TT.POW, "**", start, this.pos));
+            } else {
+              tokens.push(new Token(TT.MUL, "*", start, this.pos));
+            }
+            break;
+
+          case "/":
+            tokens.push(new Token(TT.DIV, "/", this.pos));
+            this.advance();
+            break;
+
+          case "(":
+            tokens.push(new Token(TT.LPAREN, "(", this.pos));
+            this.advance();
+            break;
+
+          case ")":
+            tokens.push(new Token(TT.RPAREN, ")", this.pos));
+            this.advance();
+            break;
+
+          case "[":
+            tokens.push(new Token(TT.LSQUARE, "[", this.pos));
+            this.advance();
+            break;
+
+          case "]":
+            tokens.push(new Token(TT.RSQUARE, "]", this.pos));
+            this.advance();
+            break;
+
+          case '"':
+            this.inString = !this.inString;
+            this.advance();
+            break;
+
+          // 以数字开始，解析为HEX
+          case "0":
+          case "1":
+          case "2":
+          case "3":
+          case "4":
+          case "5":
+          case "6":
+          case "7":
+          case "8":
+          case "9":
+            tokens.push(this.makeHex());
+            break;
+
+          default:
+            if (IDENT_TEXT.test(this.c)) {
+              tokens.push(this.makeIdent(IDENT_TEXT));
+              break;
+            }
+
+            const posStart = this.pos.copy();
+            const c = this.c;
+            this.advance();
+            throw new IllegalCharError(posStart, this.pos, c).toString();
+            break;
+        }
       }
     }
 
-    tokens.push(new Token(TT_EOF, null, this.pos));
+    tokens.push(new Token(TT.EOF, null, this.pos));
     return tokens;
   }
 
-  // 0a or 0x0a
   makeHex() {
-    let str = this.curChar;
+    let str = this.c;
     const posStart = this.pos.copy();
 
     const getHex = () => {
-      while (this.curChar !== null && !HEX_TEXT.test(this.curChar)) {
-        str += this.curChar;
+      while (this.c !== null && HEX_TEXT.test(this.c)) {
+        str += this.c;
         this.advance();
       }
     };
 
     this.advance();
 
-    if ((this.curChar as string) === "x") {
-      str += this.curChar;
+    if ((this.c as string) === "x") {
+      str += this.c;
       this.advance();
       getHex();
     } else getHex();
 
-    return new Token(TT_HEX, str, posStart, this.pos);
+    return new Token(TT.HEX, str, posStart, this.pos);
   }
 
-  makeModuleOrSymbolOrHex() {
+  makeIdent(exp: RegExp) {
     let str = "";
-    let method = "";
-    let type = TT_SYMBOL;
     const posStart = this.pos.copy();
 
-    while (this.curChar !== null && !MODULE_OR_SYMBOL_TEXT.test(this.curChar)) {
-      if (type === TT_MODULE) method += this.curChar;
-
-      if (this.curChar === ".") {
-        type = TT_MODULE;
-      }
-      str += this.curChar;
+    while (this.c !== null && exp.test(this.c)) {
+      str += this.c;
       this.advance();
     }
-
-    // 优先级: SYMBOL > HEX > METHOD
-    if (type === TT_SYMBOL && !SYMBOL_TABLE.hasOwnProperty(str)) {
-      if (!HEX_TEXT.test(str)) {
-        type = TT_HEX;
-      } else {
-        type = TT_METHOD;
-      }
-    }
-
-    // is MODULE_NAME.METHOD?
-    method = method.toLowerCase();
-    if (type === TT_MODULE && !PE_FILE.includes(method)) type = TT_MMETHOD;
-
-    return new Token(type, str, posStart, this.pos);
-  }
-
-  makeMulOrPow() {
-    const posStart = this.pos.copy();
-    let tokenType = TT_MUL;
-    let value = "*";
-
-    this.advance();
-    if (this.curChar === "*") {
-      this.advance();
-      tokenType = TT_POW;
-      value += "*";
-    }
-    return new Token(tokenType, value, posStart, this.pos);
-  }
-
-  /**
-   * "user32.dll"
-   * "user32.MessageBoxA"
-   * "MessageBoxA"
-   * "s1" => 优先级: SYMBOL > HEX > METHOD
-   * "1+1" => 2
-   * "0xaa"
-   * "a b.exe"
-   *
-   * ## error
-   * "user32.dll+1"
-   * "user32.MessageBoxA+1"
-   * "MessageBoxA+1"
-   * "s1+1"
-   * 
-   * ## test
-   * 1+'user32.MessageBoxA'-0xabc+MessageBoxA+'0x22'+'MessageboxA'
-   */
-  makeString(tokens: Token[]): void {
-    let str = "";
-    let type = TT_MODULE;
-    const s = this.curChar; // " or '
-    const posStart = this.pos.copy();
-
-    this.advance();
-    while (this.curChar !== null && this.curChar !== s) {
-      str += this.curChar;
-      this.advance();
-    }
-    this.advance();
-
-    if (str.includes(".")) {
-      const [_module, _method] = str.split(".");
-      if (!PE_FILE.includes(_method)) type = TT_MMETHOD;
-    } else {
-      if (SYMBOL_TABLE.hasOwnProperty(str)) {
-        type = TT_SYMBOL;
-      } else if (/[\+\-\*\/]/.test(str)) {
-        const lexer = new Lexer(str);
-        const _tokens = lexer.makeTokens();
-        for (const tok of _tokens) tokens.push(tok);
-        return;
-      } else if (str.startsWith("0x") || !HEX_TEXT.test(str)) {
-        type = TT_HEX;
-      } else {
-        type = TT_METHOD;
-      }
-    }
-
-    tokens.push(new Token(type, str, posStart, this.pos));
+    return new Token(TT.IDENT, str, posStart, this.pos);
   }
 }
 
-abstract class CEAddressStringNode {
+abstract class BaseNode {
   constructor(public posStart: Position, public posEnd: Position) {}
 }
 
-class ModuleNode extends CEAddressStringNode {
+class IdentsNode extends BaseNode {
+  constructor(public tokens: Token[]) {
+    super(tokens[0].posStart, tokens[tokens.length - 1].posEnd);
+  }
+}
+
+class HexNode extends BaseNode {
   constructor(public token: Token) {
     super(token.posStart, token.posEnd);
   }
 }
 
-class SymbolNode extends CEAddressStringNode {
-  constructor(public token: Token) {
-    super(token.posStart, token.posEnd);
+class UnaryNode extends BaseNode {
+  constructor(public op: Token, public node: BaseNode) {
+    super(op.posStart, node.posEnd);
   }
 }
 
-class HexNode extends CEAddressStringNode {
-  constructor(public token: Token) {
-    super(token.posStart, token.posEnd);
-  }
-}
-
-class MMethodNode extends CEAddressStringNode {
-  constructor(public token: Token) {
-    super(token.posStart, token.posEnd);
-  }
-}
-
-class MethodNode extends CEAddressStringNode {
-  constructor(public token: Token) {
-    super(token.posStart, token.posEnd);
-  }
-}
-
-class UnaryOpNode extends CEAddressStringNode {
-  constructor(public token: Token, public node: CEAddressStringNode) {
-    super(token.posStart, node.posEnd);
-  }
-}
-
-class BinOpNode extends CEAddressStringNode {
+class BinaryNode extends BaseNode {
   constructor(
-    public leftNode: CEAddressStringNode,
-    public token: Token,
-    public rightNode: CEAddressStringNode
+    public leftNode: BaseNode,
+    public op: Token,
+    public rightNode: BaseNode
   ) {
     super(leftNode.posStart, rightNode.posEnd);
   }
 }
 
-class PointerNode extends CEAddressStringNode {
-  constructor(public node: CEAddressStringNode) {
+class PointerNode extends BaseNode {
+  constructor(public node: BaseNode) {
     super(node.posStart, node.posEnd);
   }
 }
@@ -420,10 +365,33 @@ class Parser {
     }
   }
 
-  parse() {
-    const pointer = this.expr();
+  getUnaryOperatorPrecedence(token: Token): number {
+    if (token.type == TT.PLUS || token.type == TT.MINUS) {
+      return 17;
+    }
+    return 0;
+  }
 
-    if (this.curToken.type !== TT_EOF) {
+  getBinaryOperatorPrecedence(token: Token): number {
+    if (token.type == TT.POW) {
+      return 16;
+    }
+
+    if (token.type == TT.MUL || token.type == TT.DIV) {
+      return 15;
+    }
+
+    if (token.type == TT.PLUS || token.type == TT.MINUS) {
+      return 14;
+    }
+
+    return 0;
+  }
+
+  parse() {
+    const pointer = this.binaryExpr();
+
+    if (this.curToken.type !== TT.EOF) {
       throw new InvalidSyntaxError(
         this.curToken.posStart,
         this.curToken.posEnd,
@@ -434,80 +402,64 @@ class Parser {
     return pointer;
   }
 
-  expr(): CEAddressStringNode {
-    let leftNode = this.term();
+  binaryExpr(parentPrecedence: number = 0): BaseNode {
+    let left: BaseNode;
 
-    while (this.curToken.type === TT_PLUS || this.curToken.type === TT_MINUS) {
-      const token = this.curToken;
-      this.advance();
-      let rightNode = this.term();
-
-      leftNode = new BinOpNode(leftNode, token, rightNode);
+    const unaryPrecedence: number = this.getUnaryOperatorPrecedence(
+      this.curToken
+    );
+    if (unaryPrecedence != 0 && unaryPrecedence >= parentPrecedence) {
+      left = this.unaryExpr();
+    } else {
+      left = this.atom();
     }
 
-    return leftNode;
+    while (true) {
+      const precedence: number = this.getBinaryOperatorPrecedence(
+        this.curToken
+      );
+      if (precedence == 0 || precedence <= parentPrecedence) break;
+
+      const op = this.curToken;
+      this.advance();
+      const right: BaseNode = this.binaryExpr(precedence);
+      left = new BinaryNode(left, op, right);
+    }
+
+    return left;
   }
 
-  term(): CEAddressStringNode {
-    let leftNode = this.factor();
-
-    while (this.curToken.type === TT_MUL || this.curToken.type === TT_DIV) {
-      const token = this.curToken;
-      this.advance();
-      let rightNode = this.factor();
-
-      leftNode = new BinOpNode(leftNode, token, rightNode);
-    }
-
-    return leftNode;
-  }
-
-  factor(): CEAddressStringNode {
-    const token = this.curToken;
-
-    if (token.type === TT_PLUS || token.type === TT_MINUS) {
-      this.advance();
-      return new UnaryOpNode(token, this.factor());
-    }
-
-    return this.power();
-  }
-
-  power() {
-    let leftNode = this.atom();
-
-    while (this.curToken.type === TT_POW) {
-      const token = this.curToken;
-      this.advance();
-      let rightNode = this.factor();
-      leftNode = new BinOpNode(leftNode, token, rightNode);
-    }
-
-    return leftNode;
+  unaryExpr(): BaseNode {
+    const op = this.curToken;
+    this.advance();
+    const _node = this.atom();
+    return new UnaryNode(op, _node);
   }
 
   atom() {
     const token = this.curToken;
 
-    if (token.type === TT_MODULE) {
-      this.advance();
-      return new ModuleNode(token);
-    } else if (token.type === TT_SYMBOL) {
-      this.advance();
-      return new SymbolNode(token);
-    } else if (token.type === TT_HEX) {
+    if (token.type === TT.HEX) {
       this.advance();
       return new HexNode(token);
-    } else if (token.type === TT_MMETHOD) {
+    }
+
+    if (token.type === TT.IDENT) {
       this.advance();
-      return new MMethodNode(token);
-    } else if (token.type === TT_METHOD) {
+
+      const tokens = [token];
+      while (this.curToken.type === TT.DOT) {
+        this.advance();
+        tokens.push(this.curToken);
+        this.advance();
+      }
+      return new IdentsNode(tokens);
+    }
+
+    if (token.type === TT.LPAREN) {
       this.advance();
-      return new MethodNode(token);
-    } else if (token.type === TT_LPAREN) {
-      this.advance();
-      const _expr = this.expr();
-      if (this.curToken.type === TT_RPAREN) {
+      const _expr = this.binaryExpr();
+      if (this.curToken.type === TT.RPAREN) {
         this.advance();
         return _expr;
       } else {
@@ -517,10 +469,12 @@ class Parser {
           `Expected ')'`
         ).toString();
       }
-    } else if (token.type === TT_LSQUARE) {
+    }
+
+    if (token.type === TT.LSQUARE) {
       this.advance();
-      const _expr = this.expr();
-      if (this.curToken.type === TT_RSQUARE) {
+      const _expr = this.binaryExpr();
+      if (this.curToken.type === TT.RSQUARE) {
         this.advance();
         return new PointerNode(_expr);
       } else {
@@ -530,44 +484,74 @@ class Parser {
           `Expected ']'`
         ).toString();
       }
-    } else {
-      throw new InvalidSyntaxError(
-        token.posStart,
-        token.posEnd,
-        `Expected '+', '-', '*', '/', MODULE, SYMBOL, HEX or MODULE_NAME.METHOD`
-      ).toString();
     }
+
+    throw new InvalidSyntaxError(
+      token.posStart,
+      token.posEnd,
+      `Invalid token`
+    ).toString();
   }
 }
 
 class Interpreter {
-  visit(node: CEAddressStringNode): number {
+  visit(node: BaseNode): number {
     if (node instanceof HexNode) {
       return parseInt(node.token.value, 16);
-    } else if (node instanceof SymbolNode) {
-      return SYMBOL_TABLE[node.token.value];
-    } else if (node instanceof ModuleNode) {
-      return MODULE_TABLE[node.token.value];
-    } else if (node instanceof MMethodNode) {
-      const [module, method] = node.token.value.split(".");
-      return MODULE_IMPOT_TABLE[module][method] ?? 0;
-    } else if (node instanceof MethodNode) {
-      const _modules: string[] = Object.keys(MODULE_IMPOT_TABLE);
-      for (const moduleName of _modules) {
-        const _methods: string[] = Object.keys(MODULE_IMPOT_TABLE[moduleName]);
-        if (_methods.includes(node.token.value)) {
-          return MODULE_IMPOT_TABLE[moduleName][node.token.value];
+    } else if (node instanceof IdentsNode) {
+      // 优先级 SYMBOL -> HEX -> MODULE
+      const idents = node.tokens;
+      if (idents.length === 1) {
+        const val = idents[0].value;
+        // symbol -> hex -> method
+        if (SYMBOL_TABLE.hasOwnProperty(val)) {
+          return SYMBOL_TABLE[idents[0].value];
+        } else if (!/[^\da-f]/i.test(val)) {
+          return parseInt(val, 16);
+        } else {
+          const _modules: string[] = Object.keys(MODULE_IMPOT_TABLE);
+          for (const moduleName of _modules) {
+            const _methods: string[] = Object.keys(
+              MODULE_IMPOT_TABLE[moduleName]
+            );
+            if (_methods.includes(val)) {
+              return MODULE_IMPOT_TABLE[moduleName][val];
+            }
+          }
+          throw new RuntimeError(
+            node.posStart,
+            node.posEnd,
+            `Not defined symbol "${val}"`
+          ).toString();
         }
-      }
+      } else {
+        const last: string = idents.pop().value;
+        const first = idents.map((t) => t.value).join(".");
 
-      throw new RuntimeError(
-        node.posStart,
-        node.posEnd,
-        `Not defined symbol "${node.token.value}"`
-      ).toString();
-    } else if (node instanceof UnaryOpNode) {
+        // 先在模块找method，没找到在直接找模块
+        // user32.messageboxa
+        // user32.dll
+        let r: number = MODULE_IMPOT_TABLE[first]
+          ? MODULE_IMPOT_TABLE[first][last] ?? 0
+          : 0;
+        if (!r) {
+          const module = `${first}.${last}`;
+          r = MODULE_TABLE[module];
+        }
+
+        if (!r) {
+          throw new RuntimeError(
+            node.posStart,
+            node.posEnd,
+            `Not find "${first}.${last}"`
+          ).toString();
+        }
+
+        return r;
+      }
+    } else if (node instanceof UnaryNode) {
       const value = this.visit(node.node);
-      if (node.token.type === TT_MINUS) {
+      if (node.op.type === TT.MINUS) {
         return value * -1;
       }
 
@@ -577,23 +561,21 @@ class Interpreter {
       // TODO: 无法读取内存，返回硬编码 0xce
       // TODO: 如果使用c++, 则可以读取4字节或则8字节的指针
       return 0xce;
-    } else if (node instanceof BinOpNode) {
+    } else if (node instanceof BinaryNode) {
       const left: number = this.visit(node.leftNode);
       const right: number = this.visit(node.rightNode);
 
-      switch (node.token.type) {
-        case TT_PLUS:
+      switch (node.op.type) {
+        case TT.PLUS:
           return left + right;
-        case TT_MINUS:
+        case TT.MINUS:
           return left - right;
-        case TT_MUL:
+        case TT.MUL:
           return left * right;
-        case TT_DIV:
-          if (right === 0) {
-            throw "Division by zero";
-          }
+        case TT.DIV:
+          if (right === 0) throw "Division by zero";
           return left / right;
-        case TT_POW:
+        case TT.POW:
           return left ** right;
       }
     } else {
@@ -613,6 +595,7 @@ export function getAddress(text: string): number {
 
   const parser = new Parser(tokens);
   const nodeAST = parser.parse();
+  // console.log(nodeAST);
 
   const interpreter = new Interpreter();
   const pointer = interpreter.visit(nodeAST);

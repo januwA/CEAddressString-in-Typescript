@@ -1,3 +1,8 @@
+/**
+ * npm run build
+ * npm t
+ */
+
 const assert = require("assert");
 const { getAddress } = require("./out/CEAddressString");
 
@@ -33,7 +38,7 @@ assert.ok(getAddress("([1] + [1]) * 2") === (0xce + 0xce) * 2);
 
 assert.ok(getAddress("game.exe") === MODULE_TABLE["game.exe"]);
 assert.ok(
-  getAddress(" 'game.exe' + 'user32.dll' ") ===
+  getAddress(` "game.exe" + "user32.dll" `) ===
     MODULE_TABLE["game.exe"] + MODULE_TABLE["user32.dll"]
 );
 
@@ -55,16 +60,16 @@ assert.ok(
 );
 
 assert.ok(
-  getAddress(" 'user32.MessageBoxA' + 'user32.MessageBoxW' ") ===
+  getAddress(` "user32.MessageBoxA" + "user32.MessageBoxW" `) ===
     MODULE_IMPOT_TABLE.user32.MessageBoxA +
       MODULE_IMPOT_TABLE.user32.MessageBoxW
 );
 assert.ok(
-  getAddress(" 'MessageBoxA' + 'MessageBoxW' ") ===
+  getAddress(` "MessageBoxA" + "MessageBoxW" `) ===
     MODULE_IMPOT_TABLE.user32.MessageBoxA +
       MODULE_IMPOT_TABLE.user32.MessageBoxW
 );
 
-assert.ok(getAddress(" 's1'") === SYMBOL_TABLE.s1);
-assert.ok(getAddress(" 's1' + 1 ") === SYMBOL_TABLE.s1 + 1);
-assert.ok(getAddress(" 's1 + 1' ") === SYMBOL_TABLE.s1 + 1);
+assert.ok(getAddress(` "s1"`) === SYMBOL_TABLE.s1);
+assert.ok(getAddress(` "s1" + 1 `) === SYMBOL_TABLE.s1 + 1);
+assert.ok(getAddress(` s1 + 1 `) === SYMBOL_TABLE.s1 + 1);

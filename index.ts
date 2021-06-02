@@ -20,4 +20,4 @@ const waitForUserInput = function () {
 
 waitForUserInput();
 
-// CEAddressString.run(`1+2*3`);
+// getAddress(`game.exe`);
